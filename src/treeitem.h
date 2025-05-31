@@ -7,11 +7,11 @@
 #include <QList>
 #include <QVariant>
 #include <QString>
-#include <QCoreApplication> // For tr
+#include <QCoreApplication> // For tr // Retained if QCoreApplication::translate is used elsewhere, or for general Qt types
 
 class TreeItem
 {
-    Q_DECLARE_TR_FUNCTIONS(TreeItem) // For tr, if needed within TreeItem directly
+    // Q_DECLARE_TR_FUNCTIONS(TreeItem) // REMOVED to reduce potential issues, tr() is not used in treeitem.cpp
 
 public:
     enum ItemType { Folder, File };

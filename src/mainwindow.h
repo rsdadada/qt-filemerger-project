@@ -11,6 +11,7 @@
 #include <QStatusBar>      // Added for QStatusBar
 #include <QProgressBar>    // Added for QProgressBar
 #include <QMenu>           // Added for QMenu
+#include <QAction>         // Added for QAction
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -48,6 +49,7 @@ private slots:
     void updateProgressBar(int value);
     void showContextMenu(const QPoint &point);
     void handleSelectByExtensionTriggered(const QModelIndex& folderIndex, const QString& extension);
+    void onRecursiveSelectByExtensionTriggered();
 
 private:
     // void setupUi(); // Helper to set up UI elements if not using .ui file
@@ -63,6 +65,7 @@ private:
     QStatusBar *statusBar; // Will use QMainWindow's default status bar
     QProgressBar *progressBar; // Added for the progress bar
 
+    QAction *actionRecursiveSelectByExtension; // Action for new recursive selection
 
     CustomFileModel *fileModel;
     FileMergerLogic *mergerLogic;

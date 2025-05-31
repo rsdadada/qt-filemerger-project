@@ -3,9 +3,10 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
-#include <QApplication> // For style icons if used
-#include <QStyle>       // For style icons if used
 #include <functional>   // Required for std::function
+#include <QDirIterator>
+#include <QMimeDatabase>
+#include <QMimeType>
 
 CustomFileModel::CustomFileModel(const QString &rootPath, QObject *parent)
     : QAbstractItemModel(parent)
@@ -13,7 +14,7 @@ CustomFileModel::CustomFileModel(const QString &rootPath, QObject *parent)
     // The rootItem in QAbstractItemModel is conceptual (QModelIndex()).
     // We create our own TreeItem that acts as the invisible root for our data.
     // The actual displayed root items will be children of this conceptual rootItem.
-    rootItem = new TreeItem(tr("RootNode"), TreeItem::Folder); // Invisible root, name is not shown
+    rootItem = new TreeItem(QStringLiteral("__InvisibleRoot__"), TreeItem::Folder, nullptr); // Use new constructor
     setupModelData(rootPath, rootItem);
 
     // Example: Filter for specific file types - adjust as needed
@@ -106,19 +107,11 @@ QVariant CustomFileModel::data(const QModelIndex &index, int role) const
 
     // For Qt::CheckStateRole, now applies to both files and folders
     if (role == Qt::CheckStateRole && index.column() == 0) {
-        return item->checkState();
+        return static_cast<int>(item->checkState());
     }
 
     if (role == Qt::ToolTipRole && index.column() == 0) {
         return item->path(); // Show full path as tooltip
-    }
-
-    // Optional: Add icons for file/folder
-    if (role == Qt::DecorationRole && index.column() == 0) {
-        if (item->type() == TreeItem::Folder)
-            return QApplication::style()->standardIcon(QStyle::SP_DirIcon);
-        else if (item->type() == TreeItem::File)
-            return QApplication::style()->standardIcon(QStyle::SP_FileIcon);
     }
 
     return QVariant();
@@ -137,7 +130,7 @@ Qt::ItemFlags CustomFileModel::flags(const QModelIndex& index) const
         return defaultFlags | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     } else if (item->type() == TreeItem::Folder) {
         // Folders are now checkable (tristate)
-        return defaultFlags | Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable | Qt::ItemIsTristate;
+        return defaultFlags | Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable | Qt::ItemIsUserTristate;
     }
     return defaultFlags;
 }
@@ -228,7 +221,7 @@ void CustomFileModel::setupModelData(const QString &currentPath, TreeItem *paren
         return;
     }
 
-    dir.setFilter(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot);
+    dir.setFilter(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Readable);
     dir.setSorting(QDir::Name | QDir::DirsFirst); // Sort by name, folders first
 
     QFileInfoList entries = dir.entryInfoList();
@@ -267,10 +260,25 @@ void CustomFileModel::toggleCheckState(const QModelIndex &index) {
     if (!index.isValid() || index.column() != 0) return;
 
     TreeItem *item = static_cast<TreeItem*>(index.internalPointer());
+    Qt::CheckState currentState = item->checkState();
+    Qt::CheckState newState;
+
     if (item->type() == TreeItem::File) {
-        Qt::CheckState currentState = item->checkState();
-        Qt::CheckState newState = (currentState == Qt::Checked) ? Qt::Unchecked : Qt::Checked;
-        setData(index, newState, Qt::CheckStateRole); // This will emit dataChanged
+        newState = (currentState == Qt::Checked) ? Qt::Unchecked : Qt::Checked;
+        // setData will emit dataChanged and update parent folder state
+        setData(index, newState, Qt::CheckStateRole); 
+    } else if (item->type() == TreeItem::Folder) {
+        // When a folder is toggled:
+        // If it's Unchecked or PartiallyChecked, it becomes Checked.
+        // If it's Checked, it becomes Unchecked.
+        if (currentState == Qt::Checked) {
+            newState = Qt::Unchecked;
+        } else { // Unchecked or PartiallyChecked
+            newState = Qt::Checked;
+        }
+        // Use setData to ensure propagation and signals are handled correctly.
+        // setData for a folder will propagate the newState to children.
+        setData(index, newState, Qt::CheckStateRole);
     }
 }
 
@@ -309,7 +317,6 @@ void CustomFileModel::setAllCheckStates(Qt::CheckState state) {
 // The old setAllCheckStatesRecursive can be removed or commented out.
 // For now, I will comment it out. If it's referenced elsewhere, those references would need updating.
 // It seems `setAllCheckStates` is the main entry point and now uses `setAllCheckStatesRecursiveInternal`.
-}
 
 
 QStringList CustomFileModel::getCheckedFilesPaths() const {
@@ -459,15 +466,16 @@ void CustomFileModel::propagateFolderStateToChildren(TreeItem *folderItem, Qt::C
 
 void CustomFileModel::selectFilesByExtension(const QModelIndex &folderIndex, const QString &extension)
 {
-    if (!folderIndex.isValid()) {
-        qWarning() << "selectFilesByExtension: Invalid folderIndex.";
-        return;
-    }
-
-    TreeItem *folderItem = static_cast<TreeItem*>(folderIndex.internalPointer());
-    if (!folderItem || folderItem->type() != TreeItem::Folder) {
-        qWarning() << "selectFilesByExtension: Index does not point to a valid folder item.";
-        return;
+    TreeItem *folderItem;
+    if (!folderIndex.isValid()) { // If folderIndex is invalid, operate on rootItem's children
+        folderItem = rootItem;
+        // qDebug() << "selectFilesByExtension: Operating on root level items.";
+    } else {
+        folderItem = static_cast<TreeItem*>(folderIndex.internalPointer());
+        if (!folderItem || folderItem->type() != TreeItem::Folder) {
+            qWarning() << "selectFilesByExtension: Index does not point to a valid folder item or root.";
+            return;
+        }
     }
 
     if (extension.isEmpty()) {
@@ -480,25 +488,108 @@ void CustomFileModel::selectFilesByExtension(const QModelIndex &folderIndex, con
         actualExtension.prepend(".");
     }
 
-    qDebug() << "selectFilesByExtension: Folder -" << folderItem->name() << "Extension -" << actualExtension;
+    qDebug() << "selectFilesByExtension: Target Folder -" << (folderIndex.isValid() ? folderItem->name() : "Root") << "Extension -" << actualExtension;
 
     for (int i = 0; i < folderItem->childCount(); ++i) {
         TreeItem *childItem = folderItem->child(i);
         if (childItem && childItem->type() == TreeItem::File) {
             if (childItem->name().endsWith(actualExtension, Qt::CaseInsensitive)) {
                 if (childItem->checkState() != Qt::Checked) {
-                    childItem->setCheckState(Qt::Checked);
-                    QModelIndex childIndex = index(i, 0, folderIndex);
+                    QModelIndex childIndex;
+                    if (!folderIndex.isValid()){ 
+                        childIndex = index(i, 0, QModelIndex());
+                    } else { 
+                        childIndex = index(i, 0, folderIndex);
+                    }
+
                     if (childIndex.isValid()) {
-                        qDebug() << "Emitting dataChanged for" << childItem->name();
-                        emit dataChanged(childIndex, childIndex, {Qt::CheckStateRole});
+                        setData(childIndex, Qt::Checked, Qt::CheckStateRole); 
                     } else {
-                        qWarning() << "Could not get valid QModelIndex for child" << childItem->name();
+                        qWarning() << "Could not get valid QModelIndex for child" << childItem->name() << "in selectFilesByExtension";
                     }
                 }
             }
         }
     }
-    // After iterating through all children, the folder's state might need to be updated.
-    updateFolderCheckState(folderIndex);
+    // Rely on setData's existing update propagation.
+}
+
+// New methods for recursive selection by extension
+void CustomFileModel::selectFilesByExtensionRecursive(const QModelIndex& startIndex, const QString &extension)
+{
+    if (extension.isEmpty()) {
+        qWarning() << "selectFilesByExtensionRecursive: Extension string is empty.";
+        return;
+    }
+
+    // Normalize extension string (ensure it starts with a dot)
+    QString normalizedExtension = extension;
+    if (!normalizedExtension.startsWith(".")) {
+        normalizedExtension.prepend(".");
+    }
+
+    qDebug() << "Starting recursive selection. StartIndex valid:" << startIndex.isValid() << "Extension:" << normalizedExtension;
+
+    // We will be changing data, potentially a lot. It's good practice to emit signals
+    // that can tell the view to prepare for a larger update, though for CheckStateRole,
+    // individual dataChanged signals are often handled efficiently by Qt views.
+    // For simplicity and to leverage existing updateFolderCheckState propagation,
+    // we'll rely on individual setData calls emitting dataChanged.
+
+    selectFilesByExtensionRecursiveHelper(startIndex, normalizedExtension);
+
+    // After the recursive process, if the starting point was a valid folder,
+    // its check state might need to be updated based on its children's new states.
+    // However, the `setData` calls on files will trigger `updateFolderCheckState` for their parents,
+    // which will propagate upwards. So, an explicit call here for `startIndex` might be redundant
+    // if `startIndex` is a parent of modified files, or it might be needed if `startIndex` itself
+    // didn't have direct file children changed but its subfolders did.
+    // To be safe, and ensure the top-most affected folder in this operation (startIndex, if valid)
+    // gets its state correctly evaluated *after* all its descendants are processed:
+    if (startIndex.isValid()) {
+        TreeItem *item = static_cast<TreeItem*>(startIndex.internalPointer());
+        if (item && item->type() == TreeItem::Folder) {
+             // This ensures that if a sub-sub-folder caused a change that partially checks `startIndex`,
+             // `startIndex` reflects this after the whole operation.
+            updateFolderCheckState(startIndex);
+        }
+    }
+    // If startIndex is invalid (QModelIndex()), it means we started from the rootItem's children.
+    // The update propagation should have handled all visible top-level folders.
+}
+
+void CustomFileModel::selectFilesByExtensionRecursiveHelper(const QModelIndex& currentIndex, const QString &normalizedExtension)
+{
+    TreeItem *parentItem;
+    if (!currentIndex.isValid()) { // Operating on children of the invisible rootItem
+        parentItem = rootItem;
+    } else {
+        parentItem = static_cast<TreeItem*>(currentIndex.internalPointer());
+        // Ensure the current item itself is a folder before proceeding with its children
+        if (!parentItem || parentItem->type() != TreeItem::Folder) {
+            return;
+        }
+    }
+
+    for (int i = 0; i < parentItem->childCount(); ++i) {
+        QModelIndex childModelIndex = index(i, 0, currentIndex);
+        if (!childModelIndex.isValid()) {
+            continue;
+        }
+
+        TreeItem *childItem = static_cast<TreeItem*>(childModelIndex.internalPointer());
+        if (!childItem) {
+            continue;
+        }
+
+        if (childItem->type() == TreeItem::File) {
+            if (childItem->name().endsWith(normalizedExtension, Qt::CaseInsensitive)) {
+                if (childItem->checkState() != Qt::Checked) {
+                    setData(childModelIndex, Qt::Checked, Qt::CheckStateRole);
+                }
+            }
+        } else if (childItem->type() == TreeItem::Folder) {
+            selectFilesByExtensionRecursiveHelper(childModelIndex, normalizedExtension); // Recurse into subfolder
+        }
+    }
 }

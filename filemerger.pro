@@ -3,17 +3,17 @@ TARGET = FileMergerApp
 TEMPLATE = app
 
 SOURCES += \
-    main.cpp \
-    mainwindow.cpp \
-    filemergerlogic.cpp \
-    customfilemodel.cpp \
-    treeitem.cpp
+    src/main.cpp \
+    src/mainwindow.cpp \
+    src/filemergerlogic.cpp \
+    src/customfilemodel.cpp \
+    src/treeitem.cpp
 
 HEADERS  += \
-    mainwindow.h \
-    filemergerlogic.h \
-    customfilemodel.h \
-    treeitem.h
+    src/mainwindow.h \
+    src/filemergerlogic.h \
+    src/customfilemodel.h \
+    src/treeitem.h
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

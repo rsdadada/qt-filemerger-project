@@ -7,6 +7,8 @@
 #include <QDebug>          // Added for qDebug
 #include <QFileInfo>       // Added for QFileInfo
 #include <QtAlgorithms>    // Added for qSort (though often pulled in by other headers)
+#include <algorithm>     // Added for std::sort
+#include <QMenuBar>        // Added to provide full definition for QMenuBar
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -18,6 +20,8 @@
 #include <QProgressBar>
 #include <QHeaderView>  // For fileTreeView->header()
 #include <QGroupBox>    // For QGroupBox
+#include <QInputDialog> // For QInputDialog
+#include <QMenu>        // For QMenu (already included, but good for context)
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), progressBar(nullptr), fileModel(nullptr), mergerLogic(nullptr), currentFolderPath("")
@@ -70,6 +74,13 @@ MainWindow::MainWindow(QWidget *parent)
     progressBar->setRange(0,100); // Default progress range
     progressBar->setTextVisible(false); // Or true if you want to show percentage text on bar
 
+    // Create a Tools menu
+    QMenu *toolsMenu = menuBar()->addMenu(tr("工具 (&T)"));
+
+    // Add new action for recursive selection by extension
+    actionRecursiveSelectByExtension = new QAction(tr("递归按后缀选择... (&R)"), this);
+    toolsMenu->addAction(actionRecursiveSelectByExtension);
+
     updateStatus(tr("请选择一个文件夹 (Please select a folder)."));
 
     // Initialize logic and model
@@ -109,6 +120,9 @@ void MainWindow::connectSignalsAndSlots()
 
     // Connect context menu signal
     connect(fileTreeView, &QTreeView::customContextMenuRequested, this, &MainWindow::showContextMenu);
+
+    // Connect new action signal
+    connect(actionRecursiveSelectByExtension, &QAction::triggered, this, &MainWindow::onRecursiveSelectByExtensionTriggered);
 }
 
 
@@ -281,6 +295,8 @@ void MainWindow::showContextMenu(const QPoint &point)
     // For this tool, any folder can show this context menu for its direct file children.
 
     QMenu contextMenu(this);
+    contextMenu.setObjectName("FileTreeContextMenu"); // Set object name for testing/styling
+
     QStringList extensions;
     TreeItem* folderItem = item; // Already have the item
 
@@ -297,7 +313,10 @@ void MainWindow::showContextMenu(const QPoint &point)
             }
         }
     }
-    qSort(extensions.begin(), extensions.end(), Qt::CaseInsensitiveLess); // Use Qt::CaseInsensitiveLess for proper sorting
+    // New approach for Qt 6 using std::sort and a lambda for case-insensitive sorting:
+    std::sort(extensions.begin(), extensions.end(), [](const QString &s1, const QString &s2) {
+        return s1.compare(s2, Qt::CaseInsensitive) < 0;
+    });
 
     if (extensions.isEmpty()) {
         QAction* noFilesAction = contextMenu.addAction(tr("No file extensions found in this folder"));
@@ -323,5 +342,53 @@ void MainWindow::handleSelectByExtensionTriggered(const QModelIndex& folderIndex
         // The model's selectFilesByExtension expects this format or handles it.
         // (Checked customfilemodel.cpp, it prepends "." if missing, so sending ".txt" is fine)
         fileModel->selectFilesByExtension(folderIndex, extension);
+    }
+}
+
+void MainWindow::onRecursiveSelectByExtensionTriggered()
+{
+    if (!fileModel) {
+        QMessageBox::information(this, tr("无模型 (No Model)"), tr("请先加载一个文件夹。 (Please load a folder first.)"));
+        return;
+    }
+
+    bool ok;
+    QString extension = QInputDialog::getText(this, tr("按后缀选择 (Select by Extension)"),
+                                              tr("请输入文件后缀名 (例如 .txt, log): (Enter file extension (e.g., .txt, log):)"),
+                                              QLineEdit::Normal, "", &ok);
+
+    if (ok && !extension.isEmpty()) {
+        QModelIndex targetStartIndex = fileTreeView->currentIndex();
+        TreeItem* selectedItem = nullptr;
+        bool useSelectedFolder = false;
+
+        if (targetStartIndex.isValid()) {
+            selectedItem = static_cast<TreeItem*>(targetStartIndex.internalPointer());
+            if (selectedItem && selectedItem->type() == TreeItem::Folder) {
+                useSelectedFolder = true;
+            }
+        }
+
+        QModelIndex effectiveStartIndex;
+        QString operationScopeMessage;
+        if (useSelectedFolder) {
+            effectiveStartIndex = targetStartIndex;
+            operationScopeMessage = tr("在文件夹 '%1' 中 (In folder '%1')").arg(selectedItem->name());
+        } else {
+            effectiveStartIndex = QModelIndex(); // Root
+            operationScopeMessage = tr("在根目录中 (In root directory)");
+        }
+
+        qDebug() << "Recursive select by extension triggered." << operationScopeMessage << "Extension:" << extension;
+        updateStatus(tr("正在按后缀 '%1' %2 选择文件... (Selecting files by extension '%1' %2...)").arg(extension, operationScopeMessage));
+
+        fileModel->selectFilesByExtensionRecursive(effectiveStartIndex, extension);
+
+        // The model changes should trigger view updates and status updates via updateFolderCheckState.
+        // We can set a general status update here too.
+        updateStatus(tr("按后缀 '%1' %2 选择操作完成。 (Selection by extension '%1' %2 complete.)").arg(extension, operationScopeMessage));
+
+    } else if (ok && extension.isEmpty()){
+        QMessageBox::warning(this, tr("输入无效 (Invalid Input)"), tr("后缀名不能为空。 (Extension cannot be empty.)"));
     }
 }

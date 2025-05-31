@@ -41,6 +41,7 @@ public:
     QStringList getCheckedFilesPaths() const;
     bool hasFiles() const;
     void selectFilesByExtension(const QModelIndex &folderIndex, const QString &extension);
+    void selectFilesByExtensionRecursive(const QModelIndex& startIndex, const QString &extension);
 
 private:
     void setupModelData(const QString &rootPath, TreeItem *parent);
@@ -49,6 +50,7 @@ private:
     bool hasFilesRecursive(TreeItem* item) const;
     void updateFolderCheckState(const QModelIndex &folderIndex);
     void propagateFolderStateToChildren(TreeItem *folderItem, Qt::CheckState state, const QModelIndex &parentFolderIndex);
+    void selectFilesByExtensionRecursiveHelper(const QModelIndex& currentIndex, const QString &normalizedExtension);
 
 
     TreeItem *rootItem;

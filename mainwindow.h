@@ -10,6 +10,7 @@
 #include <QTreeView>       // Added for QTreeView
 #include <QStatusBar>      // Added for QStatusBar
 #include <QProgressBar>    // Added for QProgressBar
+#include <QMenu>           // Added for QMenu
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -45,7 +46,8 @@ private slots:
     void updateStatus(const QString &message);
     void mergeProcessFinished(bool success, const QString &messageOrPath);
     void updateProgressBar(int value);
-
+    void showContextMenu(const QPoint &point);
+    void handleSelectByExtensionTriggered(const QModelIndex& folderIndex, const QString& extension);
 
 private:
     // void setupUi(); // Helper to set up UI elements if not using .ui file

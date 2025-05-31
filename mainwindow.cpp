@@ -3,6 +3,10 @@
 #include "mainwindow.h"
 #include "customfilemodel.h"
 #include "filemergerlogic.h"
+#include "treeitem.h"      // Added for TreeItem
+#include <QDebug>          // Added for qDebug
+#include <QFileInfo>       // Added for QFileInfo
+#include <QtAlgorithms>    // Added for qSort (though often pulled in by other headers)
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -42,6 +46,7 @@ MainWindow::MainWindow(QWidget *parent)
     QGroupBox *fileSelectGroup = new QGroupBox(tr("文件选择 (File Selection)"));
     QVBoxLayout *fileSelectLayout = new QVBoxLayout(fileSelectGroup);
     fileTreeView = new QTreeView();
+    fileTreeView->setContextMenuPolicy(Qt::CustomContextMenu); // Set context menu policy
     fileSelectLayout->addWidget(fileTreeView);
     mainLayout->addWidget(fileSelectGroup, 1); // Stretch factor 1 for this group
 
@@ -101,6 +106,9 @@ void MainWindow::connectSignalsAndSlots()
     connect(mergerLogic, &FileMergerLogic::statusUpdated, this, &MainWindow::updateStatus);
     connect(mergerLogic, &FileMergerLogic::mergeFinished, this, &MainWindow::mergeProcessFinished);
     connect(mergerLogic, &FileMergerLogic::progressUpdated, this, &MainWindow::updateProgressBar);
+
+    // Connect context menu signal
+    connect(fileTreeView, &QTreeView::customContextMenuRequested, this, &MainWindow::showContextMenu);
 }
 
 
@@ -232,4 +240,88 @@ void MainWindow::updateProgressBar(int value) {
             progressBar->show();
         }
     }
-} 
+}
+
+void MainWindow::showContextMenu(const QPoint &point)
+{
+    QModelIndex index = fileTreeView->indexAt(point);
+    if (!index.isValid()) {
+        return;
+    }
+
+    TreeItem *item = static_cast<TreeItem*>(index.internalPointer());
+    if (!item || item->type() != TreeItem::Folder) {
+        return;
+    }
+
+    // Optional: Restrict to root folders if desired
+    // if (index.parent().isValid()) { // This means it's not a direct child of the invisible root
+    //     qDebug() << "Context menu requested on non-root folder:" << item->name();
+    //     return; // Only for root folders (direct children of currentFolderPath)
+    // }
+    // For now, allowing on any folder. If only root folders, the check above `index.parent().isValid()`
+    // would be `if (index.parent() != fileModel->index(fileModel->rowCount(QModelIndex())-1,0,QModelIndex()))`
+    // or simpler, check TreeItem's parent.
+    // A TreeItem is a root folder if its parent is the model's conceptual rootItem.
+    // TreeItem* parentOfClickedItem = item->parentItem();
+    // if (parentOfClickedItem == nullptr || parentOfClickedItem->parentItem() != nullptr) {
+    //     // This logic depends on how CustomFileModel's rootItem is structured.
+    //     // Assuming CustomFileModel::index() returns QModelIndex() for parent of top-level items.
+    //     // So, if index.parent().isValid() is false, it's a top-level item.
+    //     // The requirement was "root folder (direct child of fileModel->rootItem)".
+    //     // This means index.parent() should be invalid.
+    //     // The current CustomFileModel structure has an invisible rootItem.
+    //     // Folders displayed in the tree are children of this invisible rootItem,
+    //     // or children of other displayed folders.
+    //     // So, a "root folder" in the display is one whose parent in the model is the invisible root.
+    //     // The QModelIndex for the invisible root is QModelIndex().
+    //     // Thus, if index.parent() == QModelIndex(), it's a "root folder" in the display.
+    //     // QModelIndex::parent() returns an invalid QModelIndex for top-level items.
+    // }
+    // For this tool, any folder can show this context menu for its direct file children.
+
+    QMenu contextMenu(this);
+    QStringList extensions;
+    TreeItem* folderItem = item; // Already have the item
+
+    for (int i = 0; i < folderItem->childCount(); ++i) {
+        TreeItem* childItem = folderItem->child(i);
+        if (childItem && childItem->type() == TreeItem::File) {
+            QFileInfo fileInfo(childItem->name());
+            QString ext = fileInfo.suffix(); // suffix() returns "txt" from "file.txt"
+            if (!ext.isEmpty()) {
+                QString extWithDot = "." + ext;
+                if (!extensions.contains(extWithDot, Qt::CaseInsensitive)) {
+                    extensions.append(extWithDot);
+                }
+            }
+        }
+    }
+    qSort(extensions.begin(), extensions.end(), Qt::CaseInsensitiveLess); // Use Qt::CaseInsensitiveLess for proper sorting
+
+    if (extensions.isEmpty()) {
+        QAction* noFilesAction = contextMenu.addAction(tr("No file extensions found in this folder"));
+        noFilesAction->setEnabled(false);
+    } else {
+        for (const QString &ext : extensions) {
+            QAction *action = contextMenu.addAction(tr("Select all *%1 files").arg(ext));
+            // Using lambda to capture necessary data (folderIndex and extension)
+            connect(action, &QAction::triggered, this, [this, index, ext]() {
+                this->handleSelectByExtensionTriggered(index, ext);
+            });
+        }
+    }
+
+    contextMenu.exec(fileTreeView->viewport()->mapToGlobal(point));
+}
+
+void MainWindow::handleSelectByExtensionTriggered(const QModelIndex& folderIndex, const QString& extension)
+{
+    qDebug() << "handleSelectByExtensionTriggered: Folder" << folderIndex.data().toString() << "Extension" << extension;
+    if (fileModel && folderIndex.isValid()) {
+        // The extension passed here includes the dot, e.g., ".txt"
+        // The model's selectFilesByExtension expects this format or handles it.
+        // (Checked customfilemodel.cpp, it prepends "." if missing, so sending ".txt" is fine)
+        fileModel->selectFilesByExtension(folderIndex, extension);
+    }
+}

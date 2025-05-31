@@ -83,20 +83,14 @@ Qt::CheckState TreeItem::checkState() const {
     // However, if a folder could be "partially checked" if some children are,
     // that logic would go here or be managed by the model.
     // For now, only files have a meaningful check state.
-    if (itemType == File) {
-        return itemCheckState;
-    }
-    // Return Qt::Unchecked or some other default for folders if they are ever queried.
-    // Or, the model's flags() method should prevent checking folders.
-    return Qt::Unchecked;
+    // This method now returns the itemCheckState directly, which can be
+    // Unchecked, PartiallyChecked, or Checked for folders, as managed by the model.
+    return itemCheckState;
 }
 
 void TreeItem::setCheckState(Qt::CheckState state) {
-    if (itemType == File) { // Only files can have their check state set
-        itemCheckState = state;
-    }
-    // If folders could be checked, or if changing a child's state should
-    // affect a parent folder's visual state (e.g., partially checked),
-    // that logic would be more complex and typically involve signals/slots
-    // or updates propagated through the model.
-} 
+    // This method now sets the itemCheckState directly for both files and folders.
+    // The CustomFileModel will be responsible for determining the appropriate
+    // state for a folder (e.g., Qt::PartiallyChecked).
+    itemCheckState = state;
+}

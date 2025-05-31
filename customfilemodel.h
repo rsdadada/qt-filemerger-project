@@ -40,13 +40,15 @@ public:
     void setAllCheckStates(Qt::CheckState state);
     QStringList getCheckedFilesPaths() const;
     bool hasFiles() const;
-
+    void selectFilesByExtension(const QModelIndex &folderIndex, const QString &extension);
 
 private:
     void setupModelData(const QString &rootPath, TreeItem *parent);
     void getCheckedFilesRecursive(TreeItem *item, QStringList &paths) const;
     void setAllCheckStatesRecursive(TreeItem *item, Qt::CheckState state); // Removed changedIndices
     bool hasFilesRecursive(TreeItem* item) const;
+    void updateFolderCheckState(const QModelIndex &folderIndex);
+    void propagateFolderStateToChildren(TreeItem *folderItem, Qt::CheckState state, const QModelIndex &parentFolderIndex);
 
 
     TreeItem *rootItem;

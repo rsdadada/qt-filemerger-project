@@ -104,7 +104,8 @@ QVariant CustomFileModel::data(const QModelIndex &index, int role) const
         return item->name();
     }
 
-    if (role == Qt::CheckStateRole && index.column() == 0 && item->type() == TreeItem::File) {
+    // For Qt::CheckStateRole, now applies to both files and folders
+    if (role == Qt::CheckStateRole && index.column() == 0) {
         return item->checkState();
     }
 
@@ -135,8 +136,8 @@ Qt::ItemFlags CustomFileModel::flags(const QModelIndex& index) const
         // Files are checkable, enabled, and selectable.
         return defaultFlags | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     } else if (item->type() == TreeItem::Folder) {
-        // Folders are enabled and selectable, but not checkable directly in this design.
-        return defaultFlags | Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+        // Folders are now checkable (tristate)
+        return defaultFlags | Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable | Qt::ItemIsTristate;
     }
     return defaultFlags;
 }
@@ -148,25 +149,76 @@ bool CustomFileModel::setData(const QModelIndex &index, const QVariant &value, i
 
     TreeItem *item = static_cast<TreeItem*>(index.internalPointer());
 
-    if (role == Qt::CheckStateRole && item->type() == TreeItem::File) {
+    if (role == Qt::CheckStateRole) {
         Qt::CheckState newState = static_cast<Qt::CheckState>(value.toInt());
         qDebug() << "setData for CheckStateRole: item" << item->name()
+                 << "type:" << (item->type() == TreeItem::File ? "File" : "Folder")
                  << "current state:" << item->checkState()
                  << "new state:" << newState;
 
-        if (item->checkState() != newState) {
-            item->setCheckState(newState); // This calls TreeItem::setCheckState
-            qDebug() << "setData: State changed for" << item->name() << "to" << newState << ". Emitting dataChanged.";
+        if (item->checkState() == newState && item->type() == TreeItem::File) {
+             qDebug() << "setData: State NOT changed for file" << item->name() << "(already" << newState << ").";
+             return true; // For files, if state is same, do nothing more.
+        }
+        // For folders, even if newState is same as current (e.g. user clicks already checked folder),
+        // we might need to propagate to children if their states are inconsistent.
+
+        if (item->type() == TreeItem::File) {
+            item->setCheckState(newState);
             emit dataChanged(index, index, {Qt::CheckStateRole});
+            updateFolderCheckState(parent(index)); // Update parent folder state
             return true;
-        } else {
-            qDebug() << "setData: State NOT changed for" << item->name() << "(already" << newState << "). View trying to set same state.";
-            return true; // Return true even if state is not changed
+        } else if (item->type() == TreeItem::Folder) {
+            // User clicked a folder checkbox.
+            // The newState is what the view wants to set (Checked, Unchecked, or even PartiallyChecked if user could cycle through it)
+            // Typically, a direct click on a folder checkbox toggles between Checked and Unchecked.
+            // If it was PartiallyChecked, it usually becomes Checked.
+
+            Qt::CheckState targetChildState;
+            if (newState == Qt::PartiallyChecked) {
+                // If user somehow forces folder to PartiallyChecked (e.g. not typical UI),
+                // we interpret this as checking all children. Or it could be a no-op.
+                // For simplicity, let's assume user interaction leads to Checked or Unchecked.
+                // If the folder was partially checked, a click usually makes it fully checked.
+                targetChildState = Qt::Checked;
+                newState = Qt::Checked; // Folder itself also becomes checked
+            } else {
+                targetChildState = newState; // Should be Qt::Checked or Qt::Unchecked
+            }
+
+            // Set the folder's state first, then propagate.
+            // The folder's state might be re-evaluated by updateFolderCheckState later if needed,
+            // but direct user action on a folder checkbox implies a clear intent.
+            if (item->checkState() != newState) {
+                item->setCheckState(newState);
+                emit dataChanged(index, index, {Qt::CheckStateRole});
+            }
+
+            propagateFolderStateToChildren(item, targetChildState, index);
+
+            // After propagation, the folder's own state should align with what was set (Checked or Unchecked)
+            // because all children were forced to that state.
+            // If `newState` was `Qt::PartiallyChecked` and we made it `Qt::Checked`, this ensures consistency.
+            if (item->checkState() != targetChildState) {
+                 item->setCheckState(targetChildState); // Ensure it's not left partially checked from this operation
+                 emit dataChanged(index, index, {Qt::CheckStateRole}); // Emit again if it changed from initial set
+            }
+
+            updateFolderCheckState(parent(index)); // Update parent of this folder
+            return true;
         }
     }
     return false;
 }
 
+// Helper function for setAllCheckStates
+void setAllCheckStatesRecursiveInternal(TreeItem* item, Qt::CheckState state) {
+    if (!item) return;
+    item->setCheckState(state);
+    for (int i = 0; i < item->childCount(); ++i) {
+        setAllCheckStatesRecursiveInternal(item->child(i), state);
+    }
+}
 
 void CustomFileModel::setupModelData(const QString &currentPath, TreeItem *parent)
 {
@@ -223,83 +275,40 @@ void CustomFileModel::toggleCheckState(const QModelIndex &index) {
 }
 
 void CustomFileModel::setAllCheckStates(Qt::CheckState state) {
-    // Using beginResetModel() / endResetModel() is a blunt instrument.
-    // It works but causes the view to lose its current expansion state and selection.
-    // A more refined approach is to iterate and emit dataChanged for each affected index.
-
-    QVector<QModelIndex> indicesToUpdate; // Use QVector for QModelIndex
-
-    // We need a way to get QModelIndex for each TreeItem.
-    // This recursive function will find all file items and if their state changes,
-    // it will create the QModelIndex for them and add to list.
-    std::function<void(TreeItem*, const QModelIndex&)> collectIndicesRecursively =
-        [&](TreeItem* currentItem, const QModelIndex& parentIndex) {
-        for (int i = 0; i < currentItem->childCount(); ++i) {
-            TreeItem* child = currentItem->child(i);
-            QModelIndex childIndex = index(i, 0, parentIndex); // Get the model index for the child
-
-            if (child->type() == TreeItem::File) {
-                if (child->checkState() != state) {
-                    // No need to set it here, setData will be called by the view or manually
-                    // Actually, we should set it here, then emit dataChanged.
-                    child->setCheckState(state);
-                    indicesToUpdate.append(childIndex);
-                }
-            }
-            if (child->childCount() > 0) {
-                collectIndicesRecursively(child, childIndex);
-            }
-        }
-    };
-
-    // Start recursion from the children of the invisible root item
-    if (rootItem->childCount() > 0) {
-        collectIndicesRecursively(rootItem, QModelIndex()); // QModelIndex() for parent of top-level items
+    beginResetModel();
+    for (int i = 0; i < rootItem->childCount(); ++i) {
+        setAllCheckStatesRecursiveInternal(rootItem->child(i), state);
     }
-
-    // Emit dataChanged for all collected indices
-    // This is still potentially many signals. For very large models,
-    // emitting dataChanged for entire ranges (parent's first to last child)
-    // might be better if many items under one parent change.
-    // However, individual changes are fine for moderate numbers.
-
-    // Qt's views are optimized to handle dataChanged signals.
-    // For a "select all" / "deselect all", it might be a lot of signals.
-    // If performance becomes an issue here for extremely large visible lists,
-    // one might consider emitting dataChanged for the parent QModelIndex of a block of changed items,
-    // covering the range from the first changed child row to the last changed child row.
-    // However, for simplicity and correctness, emitting for each individual changed index is robust.
-
-    if (!indicesToUpdate.isEmpty()) {
-        // One way to optimize signals slightly (if items are contiguous and under same parent):
-        // Group indices by parent and emit dataChanged for ranges.
-        // For now, individual signals:
-        for (const QModelIndex& idx : indicesToUpdate) {
-            emit dataChanged(idx, idx, {Qt::CheckStateRole});
-        }
-        // A simpler alternative that works but might be less "optimal" for the view than specific ranges:
-        // beginResetModel();
-        // setAllCheckStatesRecursive(rootItem, state); // This function would just set the state
-        // endResetModel();
-    }
+    // After setting all children, folder states are implicitly defined by their children.
+    // No need to call updateFolderCheckState explicitly here as begin/endResetModel forces view refresh.
+    endResetModel();
 }
 
 
 // This recursive part is now integrated into setAllCheckStates logic
-void CustomFileModel::setAllCheckStatesRecursive(TreeItem *item, Qt::CheckState state) {
-    for (int i = 0; i < item->childCount(); ++i) {
-        TreeItem *child = item->child(i);
-        if (child->type() == TreeItem::File) {
-            if (child->checkState() != state) {
-                 child->setCheckState(state);
-                 // The dataChanged signal needs to be emitted by the caller (setAllCheckStates)
-                 // with the correct QModelIndex.
-            }
-        }
-        if (child->childCount() > 0) {
-            setAllCheckStatesRecursive(child, state);
-        }
-    }
+// This specific version of setAllCheckStatesRecursive is no longer needed
+// due to the new setAllCheckStatesRecursiveInternal and beginResetModel/endResetModel strategy.
+// void CustomFileModel::setAllCheckStatesRecursive(TreeItem *item, Qt::CheckState state) {
+//     for (int i = 0; i < item->childCount(); ++i) {
+//         TreeItem *child = item->child(i);
+//         if (child->type() == TreeItem::File) { // Should apply to folders too if we want them to also be checked/unchecked
+//             if (child->checkState() != state) {
+//                  child->setCheckState(state);
+//                  // The dataChanged signal needs to be emitted by the caller (setAllCheckStates)
+//                  // with the correct QModelIndex.
+//             }
+//         } // else if (child->type() == TreeItem::Folder) { // If folders also get the state
+//           //  child->setCheckState(state);
+//         // }
+//         if (child->childCount() > 0) {
+//             setAllCheckStatesRecursive(child, state);
+//         }
+//     }
+// }
+
+// The old setAllCheckStatesRecursive can be removed or commented out.
+// For now, I will comment it out. If it's referenced elsewhere, those references would need updating.
+// It seems `setAllCheckStates` is the main entry point and now uses `setAllCheckStatesRecursiveInternal`.
 }
 
 
@@ -338,4 +347,158 @@ bool CustomFileModel::hasFilesRecursive(TreeItem* item) const {
         }
     }
     return false;
-} 
+}
+
+void CustomFileModel::updateFolderCheckState(const QModelIndex &folderIndex)
+{
+    if (!folderIndex.isValid()) return;
+
+    TreeItem *folderItem = static_cast<TreeItem*>(folderIndex.internalPointer());
+    if (!folderItem || folderItem->type() != TreeItem::Folder) {
+        return;
+    }
+
+    int childrenCheckedCount = 0;
+    int childrenUncheckedCount = 0;
+    int childrenPartialCount = 0;
+    int relevantChildCount = 0; // Count of files and sub-folders
+
+    for (int i = 0; i < folderItem->childCount(); ++i) {
+        TreeItem *childItem = folderItem->child(i);
+        if (!childItem) continue;
+
+        relevantChildCount++; // All children (files or folders) are relevant for parent state
+
+        if (childItem->type() == TreeItem::File) {
+            if (childItem->checkState() == Qt::Checked) {
+                childrenCheckedCount++;
+            } else { // Qt::Unchecked (files are not tristate)
+                childrenUncheckedCount++;
+            }
+        } else if (childItem->type() == TreeItem::Folder) {
+            Qt::CheckState childFolderState = childItem->checkState();
+            if (childFolderState == Qt::Checked) {
+                childrenCheckedCount++;
+            } else if (childFolderState == Qt::PartiallyChecked) {
+                childrenPartialCount++;
+            } else { // Qt::Unchecked
+                childrenUncheckedCount++;
+            }
+        }
+    }
+
+    Qt::CheckState newState;
+    if (relevantChildCount == 0) {
+        newState = Qt::Unchecked; // Or Qt::Checked, depending on desired default for empty folders
+    } else if (childrenPartialCount > 0) {
+        newState = Qt::PartiallyChecked;
+    } else if (childrenCheckedCount > 0 && childrenUncheckedCount > 0) {
+        newState = Qt::PartiallyChecked;
+    } else if (childrenCheckedCount == relevantChildCount) {
+        newState = Qt::Checked;
+    } else if (childrenUncheckedCount == relevantChildCount) {
+        newState = Qt::Unchecked;
+    } else {
+        // This case should ideally not be reached if logic is correct
+        // For example, if some children are checked and some are partial, it's partial.
+        // If all are checked, it's checked. If all are unchecked, it's unchecked.
+        // If a mix of checked and unchecked, it's partial.
+        // The conditions above should cover these.
+        // Defaulting to PartiallyChecked as a fallback if something is missed.
+        newState = Qt::PartiallyChecked;
+         qWarning() << "updateFolderCheckState: Unhandled state combination for folder" << folderItem->name()
+                   << "Checked:" << childrenCheckedCount
+                   << "Unchecked:" << childrenUncheckedCount
+                   << "Partial:" << childrenPartialCount
+                   << "TotalRelevant:" << relevantChildCount;
+    }
+
+    if (folderItem->checkState() != newState) {
+        folderItem->setCheckState(newState);
+        emit dataChanged(folderIndex, folderIndex, {Qt::CheckStateRole});
+
+        QModelIndex parentModelIndex = parent(folderIndex);
+        if (parentModelIndex.isValid()) {
+            updateFolderCheckState(parentModelIndex);
+        }
+    }
+}
+
+void CustomFileModel::propagateFolderStateToChildren(TreeItem *folderItem, Qt::CheckState state, const QModelIndex &parentFolderIndex)
+{
+    if (!folderItem) return;
+
+    // State to propagate to children is either Checked or Unchecked.
+    // Folders themselves can become PartiallyChecked, but when a user checks/unchecks a folder,
+    // its children are all checked or all unchecked.
+    Qt::CheckState childStateToSet = (state == Qt::PartiallyChecked) ? Qt::Checked : state; // Default to checked if parent becomes partial? No, should be full check/uncheck.
+    childStateToSet = (state == Qt::Checked) ? Qt::Checked : Qt::Unchecked;
+
+
+    for (int i = 0; i < folderItem->childCount(); ++i) {
+        TreeItem* childItem = folderItem->child(i);
+        if (!childItem) continue;
+
+        QModelIndex childIndex = index(i, 0, parentFolderIndex);
+        if (!childIndex.isValid()) {
+            qWarning() << "propagateFolderStateToChildren: Could not get valid QModelIndex for child" << childItem->name();
+            continue;
+        }
+
+        if (childItem->checkState() != childStateToSet) {
+            childItem->setCheckState(childStateToSet);
+            emit dataChanged(childIndex, childIndex, {Qt::CheckStateRole});
+        }
+
+        if (childItem->type() == TreeItem::Folder) {
+            // Recursive call to propagate to grandchildren
+            propagateFolderStateToChildren(childItem, childStateToSet, childIndex);
+        }
+    }
+}
+
+void CustomFileModel::selectFilesByExtension(const QModelIndex &folderIndex, const QString &extension)
+{
+    if (!folderIndex.isValid()) {
+        qWarning() << "selectFilesByExtension: Invalid folderIndex.";
+        return;
+    }
+
+    TreeItem *folderItem = static_cast<TreeItem*>(folderIndex.internalPointer());
+    if (!folderItem || folderItem->type() != TreeItem::Folder) {
+        qWarning() << "selectFilesByExtension: Index does not point to a valid folder item.";
+        return;
+    }
+
+    if (extension.isEmpty()) {
+        qWarning() << "selectFilesByExtension: Extension string is empty.";
+        return;
+    }
+
+    QString actualExtension = extension;
+    if (!actualExtension.startsWith(".")) {
+        actualExtension.prepend(".");
+    }
+
+    qDebug() << "selectFilesByExtension: Folder -" << folderItem->name() << "Extension -" << actualExtension;
+
+    for (int i = 0; i < folderItem->childCount(); ++i) {
+        TreeItem *childItem = folderItem->child(i);
+        if (childItem && childItem->type() == TreeItem::File) {
+            if (childItem->name().endsWith(actualExtension, Qt::CaseInsensitive)) {
+                if (childItem->checkState() != Qt::Checked) {
+                    childItem->setCheckState(Qt::Checked);
+                    QModelIndex childIndex = index(i, 0, folderIndex);
+                    if (childIndex.isValid()) {
+                        qDebug() << "Emitting dataChanged for" << childItem->name();
+                        emit dataChanged(childIndex, childIndex, {Qt::CheckStateRole});
+                    } else {
+                        qWarning() << "Could not get valid QModelIndex for child" << childItem->name();
+                    }
+                }
+            }
+        }
+    }
+    // After iterating through all children, the folder's state might need to be updated.
+    updateFolderCheckState(folderIndex);
+}

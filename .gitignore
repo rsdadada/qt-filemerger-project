@@ -1,0 +1,41 @@
+# Build directories
+release/
+debug/
+
+# Makefiles
+Makefile
+Makefile.*
+
+# Qt User files
+*.pro.user
+*.pro.user.*
+*.creator.user
+*.creator.user.*
+
+# Qt Project state files
+.qmake.stash
+
+# Qt Temp files
+*.backup
+*.qm
+*.obj
+*.o
+*.slo
+*.lo
+*.dll
+*.exe
+*.ilk
+*.pdb
+*.exp
+*.aps
+*.ncb
+*.pch
+*.gch
+
+# Moc generated files (usually in build dir, but good to have)
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Specific to this project if needed
+# FileMergerApp.exe # If it's generated in the root, though it should be in release/debug 

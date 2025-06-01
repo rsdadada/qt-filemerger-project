@@ -13,6 +13,9 @@
 // You might also need to include treeitem.h if it's not fully opaque
 // #include "treeitem.h"
 
+// class TestFileMergerLogic; // Forward declaration REMOVED
+// tst_filemergerlogic.cpp will be included directly before main
+
 // A common practice is to create a temporary directory for file system tests.
 // For simplicity, this example assumes a valid path can be provided.
 // In a real scenario, you'd use QTemporaryDir.
@@ -1062,8 +1065,29 @@ void TestCustomFileModel::testSelectFilesByExtensionRecursive_FromSubfolder()
 }
 
 
-// QTEST_APPLESS_MAIN(TestCustomFileModel) // Can be used if no GUI, no event loop needed for tests
-QTEST_MAIN(TestCustomFileModel) // Or QTEST_GUILESS_MAIN if some Qt features need an event loop but no GUI
-// Using QTEST_MAIN for broader compatibility in case event loop is needed by some model functions.
+// Remove QTEST_MAIN or similar macros from here
+// QTEST_APPLESS_MAIN(TestCustomFileModel)
+// QTEST_MAIN(TestCustomFileModel)
 
-#include "tst_customfilemodel.moc" // Required for MOC to process the Q_OBJECT 
+#include "tst_customfilemodel.moc" // Required for MOC to process the Q_OBJECT for TestCustomFileModel
+
+#include "tst_filemergerlogic.cpp" // Include the other test's source to get its class definition
+
+// Custom main function to run both test suites
+int main(int argc, char *argv[])
+{
+    QCoreApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+
+    int status = 0;
+    {
+        TestCustomFileModel tc;
+        status |= QTest::qExec(&tc, argc, argv);
+    }
+    {
+        TestFileMergerLogic tl; // Instantiation requires full definition,
+                                // which will be linked from tst_filemergerlogic.o
+        status |= QTest::qExec(&tl, argc, argv);
+    }
+    return status;
+}

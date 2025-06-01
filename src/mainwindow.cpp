@@ -238,6 +238,7 @@ void MainWindow::mergeProcessFinished(bool success, const QString &messageOrPath
 
     if (success) {
         QMessageBox::information(this, tr("合并完成 (Merge Complete)"), tr("文件合并成功！已保存到: (Files merged successfully! Saved to:) ") + messageOrPath);
+        deselectAllFiles();
         updateStatus(tr("合并完成。 (Merge complete.) ") + tr("文件已保存到: (File saved to:) ") + messageOrPath);
     } else {
         QMessageBox::critical(this, tr("合并失败 (Merge Failed)"), messageOrPath);

@@ -202,18 +202,20 @@ void FileMergerLogic::handleMergeWorkerFinished(bool success, const QString &mes
 {
     qDebug() << "FileMergerLogic::handleMergeWorkerFinished - Received from worker. Success:" << success << "Path:" << messageOrPath;
 
-    MergeWorker* senderWorker = qobject_cast<MergeWorker*>(sender());
+    // Current this->worker is likely null here due to QPointer and deleteLater of the worker object.
+    // Current sender() is likely null here due to deleteLater of the worker object.
+    // Current this->workerThread should still be valid at this point,
+    // pointing to the QThread instance whose worker (now deleted) just finished.
 
-    // It's crucial to ensure this slot is acting on the correct worker/thread pair,
-    // especially if a new merge operation could have been started, replacing this->worker and this->workerThread.
-    if (!senderWorker || senderWorker != this->worker || !this->workerThread) {
-        qWarning() << "FileMergerLogic::handleMergeWorkerFinished: Signal from an old/unexpected worker or thread is already cleaned up. Ignoring. Current this->worker:" << this->worker << "Sender:" << senderWorker;
+    QThread* threadToQuit = this->workerThread; // Capture current workerThread
+
+    if (!threadToQuit) {
+        qWarning() << "FileMergerLogic::handleMergeWorkerFinished: workerThread member is already null. Cannot reliably quit thread. Race condition or already cleaned up? Ignoring.";
+        // If workerThread is null, the lambda associated with its finished() signal may have already run.
         return;
     }
 
-    QThread* threadToQuit = this->workerThread; // Capture the thread associated with this worker
-
-    emit mergeFinished(success, messageOrPath);
+    emit mergeFinished(success, messageOrPath); // Emit the signal for the application/test
     qDebug() << "FileMergerLogic::handleMergeWorkerFinished - Emitted mergeFinished. Requesting quit for thread:" << threadToQuit;
 
     if (threadToQuit && threadToQuit->isRunning()) { // Check if captured thread pointer is valid and running

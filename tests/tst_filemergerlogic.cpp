@@ -498,8 +498,14 @@ void TestFileMergerLogic::testFileMergerLogic_ThreadCleanup()
     QVERIFY(args1.at(0).toBool() == true);
     QVERIFY(QFile::exists(args1.at(1).toString()));
 
+    // Wait a bit for the first thread to fully terminate and for FileMergerLogic's
+    // internal workerThread pointer to be nullified by the lambda connected to QThread::finished.
+    // This helps prevent the "Merge operation already in progress" message if the second
+    // merge is started too quickly.
+    QTest::qWait(250); // Adjusted from 100ms in thought process, giving a bit more time.
+
     logic.startMergeProcess(files2, outputDir2);
-    QVERIFY(finishedSpy.wait(5000));
+    QVERIFY(finishedSpy.wait(5000)); // This is where it was failing
     QCOMPARE(finishedSpy.count(), 1);
     QList<QVariant> args2 = finishedSpy.takeFirst();
     QVERIFY(args2.at(0).toBool() == true);

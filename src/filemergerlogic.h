@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QStringList>
+#include <QPointer>  // Added for QPointer
 
 class QThread; // Forward declaration
 
@@ -48,7 +49,7 @@ private slots:
 
 private:
     QThread *workerThread;
-    MergeWorker *worker; // Keep track of the worker
+    QPointer<MergeWorker> worker; // Keep track of the worker, now a QPointer
 };
 
 #endif // FILEMERGERLOGIC_H 

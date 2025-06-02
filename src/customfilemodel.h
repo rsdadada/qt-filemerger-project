@@ -42,6 +42,7 @@ public:
     bool hasFiles() const;
     void selectFilesByExtension(const QModelIndex &folderIndex, const QString &extension);
     void selectFilesByExtensionRecursive(const QModelIndex& startIndex, const QString &extension);
+    void populateModelFromFileList(const QStringList &absoluteFilePaths);
 
 private:
     void setupModelData(const QString &rootPath, TreeItem *parent);

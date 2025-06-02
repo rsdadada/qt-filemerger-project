@@ -72,6 +72,11 @@ private slots:
     void testSelectFilesByExtensionRecursive_FromRoot();
     void testSelectFilesByExtensionRecursive_FromSubfolder();
 
+    // Tests for populateModelFromFileList
+    void testPopulateModelFromFileList_EmptyList();
+    void testPopulateModelFromFileList_ValidFiles();
+    void testPopulateModelFromFileList_WithInvalidFiles();
+    void testPopulateModelFromFileList_ClearsPreviousData();
 
 private:
     CustomFileModel *model;
@@ -1064,6 +1069,139 @@ void TestCustomFileModel::testSelectFilesByExtensionRecursive_FromSubfolder()
     QCOMPARE(model->data(fileTxtIndex, Qt::CheckStateRole).toInt(), Qt::Unchecked);
 }
 
+void TestCustomFileModel::testPopulateModelFromFileList_EmptyList()
+{
+    // Use the model from init() which is based on an empty tempDir for this specific test's purpose,
+    // or create a new one if `originalModelRootPath` from `init()` isn't suitable.
+    // CustomFileModel model(""); // Using a local model for clarity and isolation
+    // Re-using the 'model' member, but ensure it's in a clean state or re-init.
+    // For this test, the model created in init() is fine as it's on an empty temp dir.
+
+    model->populateModelFromFileList(QStringList());
+
+    QCOMPARE(model->rowCount(QModelIndex()), 0); // No top-level items
+    QVERIFY(model->getCheckedFilesPaths().isEmpty());
+}
+
+void TestCustomFileModel::testPopulateModelFromFileList_ValidFiles()
+{
+    QTemporaryDir localTempDir; // Use a local QTemporaryDir for this test to avoid conflict with member tempDir
+    QVERIFY(localTempDir.isValid());
+
+    QString file1Path = localTempDir.filePath("test1.txt");
+    QString file2Path = localTempDir.filePath("test2.log");
+    QFile file1(file1Path);
+    QVERIFY(file1.open(QIODevice::WriteOnly));
+    file1.write("content1");
+    file1.close();
+
+    QFile file2(file2Path);
+    QVERIFY(file2.open(QIODevice::WriteOnly));
+    file2.write("content2");
+    file2.close();
+
+    // Use the class member 'model' which is initialized in init()
+    // Its root path will be the original tempDir, but populateModelFromFileList clears it.
+    QStringList filesToLoad = {file1Path, file2Path};
+    model->populateModelFromFileList(filesToLoad);
+
+    QCOMPARE(model->rowCount(QModelIndex()), 2); // Two top-level items
+
+    QModelIndex index1 = model->index(0, 0, QModelIndex());
+    QModelIndex index2 = model->index(1, 0, QModelIndex());
+
+    QStringList actualNames;
+    if(index1.isValid()) actualNames << model->data(index1, Qt::DisplayRole).toString();
+    if(index2.isValid()) actualNames << model->data(index2, Qt::DisplayRole).toString();
+    actualNames.sort(Qt::CaseInsensitive);
+
+    QStringList expectedNames = {"test1.txt", "test2.log"};
+    expectedNames.sort(Qt::CaseInsensitive);
+    QCOMPARE(actualNames, expectedNames);
+
+    // Find items by name to make assertions order-independent
+    QModelIndex foundIndex1 = findItem("test1.txt");
+    QModelIndex foundIndex2 = findItem("test2.log");
+
+    QVERIFY(foundIndex1.isValid());
+    QVERIFY(foundIndex2.isValid());
+
+    QCOMPARE(model->data(foundIndex1, Qt::CheckStateRole).toInt(), Qt::Checked);
+    QCOMPARE(model->data(foundIndex2, Qt::CheckStateRole).toInt(), Qt::Checked);
+
+    QCOMPARE(model->data(foundIndex1, Qt::ToolTipRole).toString(), QFileInfo(file1Path).absoluteFilePath());
+    QCOMPARE(model->data(foundIndex2, Qt::ToolTipRole).toString(), QFileInfo(file2Path).absoluteFilePath());
+
+    QStringList checkedPaths = model->getCheckedFilesPaths();
+    checkedPaths.sort(Qt::CaseInsensitive);
+    QStringList expectedPaths = {QFileInfo(file1Path).absoluteFilePath(), QFileInfo(file2Path).absoluteFilePath()};
+    expectedPaths.sort(Qt::CaseInsensitive);
+    QCOMPARE(checkedPaths, expectedPaths);
+}
+
+void TestCustomFileModel::testPopulateModelFromFileList_WithInvalidFiles()
+{
+    QTemporaryDir localTempDir; // Local tempDir
+    QVERIFY(localTempDir.isValid());
+
+    QString file1Path = localTempDir.filePath("realfile.txt");
+    QFile file1(file1Path);
+    QVERIFY(file1.open(QIODevice::WriteOnly));
+    file1.write("content");
+    file1.close();
+
+    QString nonExistentFilePath = localTempDir.filePath("ghost.txt");
+    QString directoryPath = localTempDir.path(); // Path to the temp directory itself
+
+    // Use the class member 'model'
+    QStringList filesToLoad = {file1Path, nonExistentFilePath, directoryPath};
+    model->populateModelFromFileList(filesToLoad);
+
+    QCOMPARE(model->rowCount(QModelIndex()), 1); // Only realfile.txt should be loaded
+
+    QModelIndex index1 = model->index(0, 0, QModelIndex());
+    QVERIFY(index1.isValid());
+    QCOMPARE(model->data(index1, Qt::DisplayRole).toString(), "realfile.txt");
+    QCOMPARE(model->data(index1, Qt::CheckStateRole).toInt(), Qt::Checked);
+
+    QStringList checkedPaths = model->getCheckedFilesPaths();
+    QCOMPARE(checkedPaths.count(), 1);
+    QVERIFY(checkedPaths.contains(QFileInfo(file1Path).absoluteFilePath()));
+}
+
+void TestCustomFileModel::testPopulateModelFromFileList_ClearsPreviousData()
+{
+    QTemporaryDir localTempDir; // Local tempDir
+    QVERIFY(localTempDir.isValid());
+
+    QString fileAPath = localTempDir.filePath("fileA.txt");
+    QFile fileA(fileAPath);
+    QVERIFY(fileA.open(QIODevice::WriteOnly)); fileA.write("A"); fileA.close();
+
+    QString fileBPath = localTempDir.filePath("fileB.txt");
+    QFile fileB(fileBPath);
+    QVERIFY(fileB.open(QIODevice::WriteOnly)); fileB.write("B"); fileB.close();
+
+    // Use the class member 'model'
+    // Initial population (can be anything, e.g. from a folder scan or previous JSON import)
+    // For simplicity, using populateModelFromFileList itself for initial state.
+    // The model is initialized with originalModelRootPath (tempDir from init()), which is empty.
+    // So, first populate it.
+    model->populateModelFromFileList({fileAPath});
+    QCOMPARE(model->rowCount(QModelIndex()), 1);
+    QModelIndex indexA = model->index(0,0,QModelIndex());
+    QVERIFY(indexA.isValid());
+    QCOMPARE(model->data(indexA, Qt::DisplayRole).toString(), "fileA.txt");
+
+    // Second population, should clear the first
+    model->populateModelFromFileList({fileBPath});
+    QCOMPARE(model->rowCount(QModelIndex()), 1);
+    QModelIndex indexB = model->index(0,0,QModelIndex());
+    QVERIFY(indexB.isValid());
+    QCOMPARE(model->data(indexB, Qt::DisplayRole).toString(), "fileB.txt");
+    QCOMPARE(model->data(indexB, Qt::CheckStateRole).toInt(), Qt::Checked);
+}
+
 
 // Remove QTEST_MAIN or similar macros from here
 // QTEST_APPLESS_MAIN(TestCustomFileModel)
@@ -1072,6 +1210,7 @@ void TestCustomFileModel::testSelectFilesByExtensionRecursive_FromSubfolder()
 #include "tst_customfilemodel.moc" // Required for MOC to process the Q_OBJECT for TestCustomFileModel
 
 #include "tst_filemergerlogic.cpp" // Include the other test's source to get its class definition
+#include "tst_jsonimportlogic.h"   // Include the header for the new test class
 
 // Custom main function to run both test suites
 int main(int argc, char *argv[])
@@ -1088,6 +1227,10 @@ int main(int argc, char *argv[])
         TestFileMergerLogic tl; // Instantiation requires full definition,
                                 // which will be linked from tst_filemergerlogic.o
         status |= QTest::qExec(&tl, argc, argv);
+    }
+    {
+        TestJsonImportLogic tjil; // Add this for the new test class
+        status |= QTest::qExec(&tjil, argc, argv);
     }
     return status;
 }

@@ -558,6 +558,43 @@ void CustomFileModel::selectFilesByExtensionRecursive(const QModelIndex& startIn
     // The update propagation should have handled all visible top-level folders.
 }
 
+
+void CustomFileModel::populateModelFromFileList(const QStringList &absoluteFilePaths)
+{
+    beginResetModel(); // Signal that the model is about to change drastically
+
+    // Clear existing model data
+    if (rootItem) {
+        rootItem->clearChildren(); // Assumes TreeItem::clearChildren() correctly deletes child TreeItems
+    } else {
+        // This case should ideally not be hit if the model is always constructed
+        // with a rootPath or if a default rootItem is created in constructor.
+        // Let's ensure rootItem is valid.
+        rootItem = new TreeItem(QStringLiteral("__InvisibleRoot__"), TreeItem::Folder, nullptr);
+    }
+
+    // Populate with new file paths
+    for (const QString &filePath : absoluteFilePaths) {
+        QFileInfo fileInfo(filePath);
+        // We only add files, not directories, directly from the list.
+        // And only if they exist.
+        if (filePath.isEmpty() || !fileInfo.exists() || !fileInfo.isFile()) {
+            qWarning() << "CustomFileModel::populateModelFromFileList: Skipping invalid, non-existent, or non-file path:" << filePath;
+            continue;
+        }
+
+        // Create TreeItem for the file. It will be a child of the invisible rootItem.
+        // These files will appear at the root level of the tree view.
+        TreeItem *fileItem = new TreeItem(fileInfo.fileName(), TreeItem::File, rootItem);
+        fileItem->setPath(fileInfo.absoluteFilePath()); // Store the full absolute path
+        fileItem->setCheckState(Qt::Checked);       // Mark as checked by default
+        rootItem->appendChild(fileItem);
+    }
+
+    endResetModel(); // Signal that the model has been reset
+}
+
+
 void CustomFileModel::selectFilesByExtensionRecursiveHelper(const QModelIndex& currentIndex, const QString &normalizedExtension)
 {
     TreeItem *parentItem;

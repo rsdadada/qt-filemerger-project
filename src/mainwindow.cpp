@@ -1,6 +1,7 @@
 // mainwindow.cpp
 
 #include "mainwindow.h"
+#include "helpdialog.h"
 #include "customfilemodel.h"
 #include "filemergerlogic.h"
 #include "treeitem.h"      // Added for TreeItem
@@ -22,6 +23,15 @@
 #include <QGroupBox>    // For QGroupBox
 #include <QInputDialog> // For QInputDialog
 #include <QMenu>        // For QMenu (already included, but good for context)
+#include <QFileDialog>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QFile>
+#include <QTextStream> // Though QFile::readAll is often used for JSON
+#include <QDir> // For path manipulation
+#include <QFileInfo> // For path manipulation
+
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), progressBar(nullptr), fileModel(nullptr), mergerLogic(nullptr), currentFolderPath("")
@@ -75,11 +85,22 @@ MainWindow::MainWindow(QWidget *parent)
     progressBar->setTextVisible(false); // Or true if you want to show percentage text on bar
 
     // Create a Tools menu
-    QMenu *toolsMenu = menuBar()->addMenu(tr("工具 (&T)"));
+    // QMenu *toolsMenu = menuBar()->addMenu(tr("工具 (&T)")); // Now a member
+    toolsMenu = menuBar()->addMenu(tr("工具 (&T)"));
+
 
     // Add new action for recursive selection by extension
     actionRecursiveSelectByExtension = new QAction(tr("递归按后缀选择... (&R)"), this);
     toolsMenu->addAction(actionRecursiveSelectByExtension);
+
+    // Add a separator for visual grouping if desired
+    toolsMenu->addSeparator();
+
+    actionImportFromJson = new QAction(tr("Import Files from JSON... (&I)"), this);
+    toolsMenu->addAction(actionImportFromJson);
+
+    actionShowJsonFormatHelp = new QAction(tr("JSON Format Help... (&H)"), this);
+    toolsMenu->addAction(actionShowJsonFormatHelp);
 
     updateStatus(tr("请选择一个文件夹 (Please select a folder)."));
 
@@ -123,6 +144,10 @@ void MainWindow::connectSignalsAndSlots()
 
     // Connect new action signal
     connect(actionRecursiveSelectByExtension, &QAction::triggered, this, &MainWindow::onRecursiveSelectByExtensionTriggered);
+
+    // Connect JSON actions
+    connect(actionImportFromJson, &QAction::triggered, this, &MainWindow::importFromJson);
+    connect(actionShowJsonFormatHelp, &QAction::triggered, this, &MainWindow::showJsonFormatHelp);
 }
 
 
@@ -392,4 +417,205 @@ void MainWindow::onRecursiveSelectByExtensionTriggered()
     } else if (ok && extension.isEmpty()){
         QMessageBox::warning(this, tr("输入无效 (Invalid Input)"), tr("后缀名不能为空。 (Extension cannot be empty.)"));
     }
+}
+
+void MainWindow::importFromJson()
+{
+    QString jsonFilePath = QFileDialog::getOpenFileName(
+        this,
+        tr("Import File List from JSON"),
+        currentFolderPath.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::HomeLocation) : currentFolderPath, // Use currentFolderPath if available
+        tr("JSON Files (*.json)")
+    );
+
+    if (jsonFilePath.isEmpty()) {
+        return; // User cancelled
+    }
+
+    QFile jsonFile(jsonFilePath);
+    if (!jsonFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Error Reading File"), tr("Could not open JSON file: %1\n%2").arg(jsonFilePath, jsonFile.errorString()));
+        return;
+    }
+
+    QByteArray jsonData = jsonFile.readAll();
+    jsonFile.close();
+
+    QJsonParseError parseError;
+    QJsonDocument jsonDoc = QJsonDocument::fromJson(jsonData, &parseError);
+
+    if (parseError.error != QJsonParseError::NoError) {
+        QMessageBox::warning(this, tr("JSON Parse Error"), tr("Could not parse JSON file: %1\nError: %2 at offset %3")
+                             .arg(jsonFilePath, parseError.errorString(), QString::number(parseError.offset)));
+        return;
+    }
+
+    if (!jsonDoc.isObject()) {
+        QMessageBox::warning(this, tr("Invalid JSON Format"), tr("The JSON file root is not an object: %1").arg(jsonFilePath));
+        return;
+    }
+
+    QJsonObject rootObject = jsonDoc.object();
+    const QString filesKey = "files_to_merge"; // As defined in our spec
+
+    if (!rootObject.contains(filesKey) || !rootObject[filesKey].isArray()) {
+        QMessageBox::warning(this, tr("Invalid JSON Structure"), tr("JSON file must contain a '%1' key with an array of file paths: %2").arg(filesKey, jsonFilePath));
+        return;
+    }
+
+    QJsonArray fileArray = rootObject[filesKey].toArray();
+    QStringList validFilesPaths;
+    QStringList errorMessages;
+    QDir jsonFileDir(QFileInfo(jsonFilePath).absolutePath()); // Directory of the JSON file for resolving relative paths
+
+    if (fileArray.isEmpty()) {
+        QMessageBox::information(this, tr("No Files"), tr("The JSON file does not list any files to import in '%1'.").arg(filesKey));
+        // Proceed to clear the model if that's the desired behavior for empty list
+        // For now, just inform and return. Step 6 will handle model interaction.
+        // This function's job is to produce the list of valid files.
+        // If the list is empty, it's still a valid outcome for this function.
+    }
+
+    for (const QJsonValue &val : fileArray) {
+        if (!val.isString()) {
+            errorMessages.append(tr("Skipping non-string entry in file list."));
+            continue;
+        }
+
+        QString pathFromFile = val.toString();
+        QString absolutePath;
+
+        QFileInfo fileInfo(pathFromFile);
+        if (fileInfo.isAbsolute()) {
+            absolutePath = pathFromFile;
+        } else {
+            // Resolve relative path against the JSON file's directory
+            absolutePath = jsonFileDir.absoluteFilePath(pathFromFile);
+        }
+
+        // Normalize the path to clean up ".." or "." and ensure consistent separators.
+        absolutePath = QDir::cleanPath(absolutePath);
+
+        QFile file(absolutePath);
+        if (!file.exists()) {
+            errorMessages.append(tr("File not found: %1 (resolved from %2)").arg(absolutePath, pathFromFile));
+            continue;
+        }
+
+        // Further check for readability could be done here, but QFile::exists() is often sufficient
+        // for this stage. The actual opening will happen during merge or if model needs content.
+        // For now, existence is the primary check after path resolution.
+        // QFileInfo checkRead(absolutePath);
+        // if (!checkRead.isReadable()) {
+        //     errorMessages.append(tr("File not readable: %1 (resolved from %2)").arg(absolutePath, pathFromFile));
+        //     continue;
+        // }
+
+        validFilesPaths.append(absolutePath);
+    }
+
+    // For now, let's just log the results.
+    // In a subsequent step, these lists will be used to update the model and show a summary.
+    qDebug() << "JSON Import Results:";
+    qDebug() << "Valid files to load:" << validFilesPaths;
+    qDebug() << "Errors/Skipped files:" << errorMessages;
+
+    if (validFilesPaths.isEmpty() && errorMessages.isEmpty() && !fileArray.isEmpty()) {
+         // This case means all files in a non-empty list were invalid non-string types
+         QMessageBox::information(this, tr("No Valid Files"), tr("No valid file paths were found in the JSON. All entries were invalid."));
+    } else if (validFilesPaths.isEmpty() && !errorMessages.isEmpty()) {
+        // All files resulted in errors
+         QMessageBox::warning(this, tr("No Files Loaded"), tr("No files could be loaded. Errors:\n%1").arg(errorMessages.join("\n")));
+    } else if (!validFilesPaths.isEmpty() && !errorMessages.isEmpty()) {
+        // Some files loaded, some errors
+        QMessageBox::information(this, tr("Partial Import"), tr("Successfully processed %1 files. Some files could not be loaded. See debug log for details for now.\nErrors:\n%2")
+                                 .arg(validFilesPaths.count())
+                                 .arg(errorMessages.join("\n")));
+        // Later, this message will be more user-friendly via a summary dialog or status bar.
+    } else if (!validFilesPaths.isEmpty() && errorMessages.isEmpty()) {
+        // All files loaded successfully
+        QMessageBox::information(this, tr("Import Successful (Pending Load)"), tr("Successfully processed %1 files from JSON. They will be loaded into the application next.").arg(validFilesPaths.count()));
+    }
+    // If validFilesPaths is empty and fileArray was also empty, the earlier message "The JSON file does not list any files..." handles it.
+
+    if (!validFilesPaths.isEmpty()) {
+        if (!fileModel) {
+            // If no folder was previously loaded, create a new model.
+            // The CustomFileModel constructor takes a rootPath. For JSON import,
+            // this path isn't strictly used for initial scanning but might be needed for other logic.
+            // Using an empty string or a placeholder like "/" might be okay if setupModelData handles it,
+            // or if populateModelFromFileList correctly initializes everything.
+            // Let's use the current working directory as a fallback, or an empty string.
+            // For simplicity, we'll use an empty string, relying on populateModelFromFileList
+            // to set up the rootItem correctly if it's null (which it does).
+            // We also need to ensure the fileTreeView is associated with this new model.
+            currentFolderPath = jsonFileDir.absolutePath(); // Set current folder to JSON file's directory for context
+            folderPathLineEdit->setText(tr("Files from JSON: %1").arg(QFileInfo(jsonFilePath).fileName()));
+
+            fileModel = new CustomFileModel("", this); // Pass empty string, model won't auto-populate from it.
+            fileTreeView->setModel(fileModel);
+            fileTreeView->expandAll(); // Optionally expand
+            fileTreeView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        }
+
+        fileModel->populateModelFromFileList(validFilesPaths);
+
+        // Update UI elements
+        bool filesNowExist = fileModel->hasFiles();
+        selectAllButton->setEnabled(filesNowExist);
+        deselectAllButton->setEnabled(filesNowExist);
+        mergeButton->setEnabled(filesNowExist);
+
+        if (filesNowExist) {
+            updateStatus(tr("Imported %1 files from JSON. %2 errors.").arg(validFilesPaths.count()).arg(errorMessages.count()));
+        } else {
+            updateStatus(tr("JSON import complete, but no valid files were loaded into the view. %1 errors.").arg(errorMessages.count()));
+        }
+
+        // More detailed summary message
+        if (!errorMessages.isEmpty()) {
+            QMessageBox::warning(this, tr("JSON Import Issues"), tr("Some files could not be imported:\n%1").arg(errorMessages.join("\n")));
+        } else if (!validFilesPaths.isEmpty()) {
+            QMessageBox::information(this, tr("Import Successful"), tr("%1 files successfully imported from JSON and are ready for merging.").arg(validFilesPaths.count()));
+        }
+        // If validFilesPaths is empty and fileArray was also empty, the message "The JSON file does not list any files..." was already shown.
+        // If validFilesPaths is empty and there were errors, the "No Files Loaded" message was shown.
+
+    } else if (fileArray.isEmpty()) {
+        // Handled by the "No Files" message box earlier.
+        // Ensure UI reflects no files if model was previously populated.
+        if (fileModel) {
+            fileModel->populateModelFromFileList(QStringList()); // Clear the model
+            selectAllButton->setEnabled(false);
+            deselectAllButton->setEnabled(false);
+            mergeButton->setEnabled(false);
+            updateStatus(tr("JSON file was empty. No files loaded."));
+        }
+    } else if (!errorMessages.isEmpty()) {
+        // This case (no valid files, but errors occurred) was already handled by a QMessageBox.
+        // If there was a model, clear it.
+        if (fileModel) {
+            fileModel->populateModelFromFileList(QStringList()); // Clear the model
+            selectAllButton->setEnabled(false);
+            deselectAllButton->setEnabled(false);
+            mergeButton->setEnabled(false);
+        }
+         updateStatus(tr("JSON import failed. No files loaded due to errors."));
+    }
+    // No need for the placeholder qDebug messages anymore as QMessagebox provides feedback.
+}
+
+void MainWindow::showJsonFormatHelp()
+{
+    // Define the path to the Markdown file.
+    // This assumes JSON_format_guide.md is in the application's current working directory
+    // or a path accessible by the application. For deployed applications,
+    // consider using Qt Resource System (qrc) for such files.
+    // For now, let's assume it's in the same directory as the executable or project root.
+    // When running from build directory, the file is in the parent directory.
+    QString helpFilePath = "../JSON_format_guide.md";
+
+    HelpDialog *helpDialog = new HelpDialog(tr("JSON Configuration Format"), helpFilePath, this);
+    helpDialog->setAttribute(Qt::WA_DeleteOnClose); // Ensure the dialog is deleted when closed
+    helpDialog->exec(); // Show as a modal dialog
 }

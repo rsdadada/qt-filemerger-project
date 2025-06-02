@@ -86,3 +86,9 @@ Qt::CheckState TreeItem::checkState() const {
 void TreeItem::setCheckState(Qt::CheckState state) {
     itemCheckState = state; // Uses itemCheckState
 }
+
+void TreeItem::clearChildren()
+{
+    qDeleteAll(childItems); // Uses childItems
+    childItems.clear();     // Uses childItems
+}

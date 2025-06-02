@@ -8,13 +8,15 @@ INCLUDEPATH += ../src
 HEADERS += \
     ../src/customfilemodel.h \
     ../src/treeitem.h \
-    ../src/filemergerlogic.h
+    ../src/filemergerlogic.h \
+    tst_jsonimportlogic.h
 
 SOURCES += \
     ../src/customfilemodel.cpp \
     ../src/treeitem.cpp \
     ../src/filemergerlogic.cpp \
-    tst_customfilemodel.cpp
+    tst_customfilemodel.cpp \
+    tst_jsonimportlogic.cpp
 # Removed tst_filemergerlogic.cpp from here as it will be included by tst_customfilemodel.cpp
 
 # If your customfilemodel.cpp or treeitem.cpp use tr() for strings that should be translated,

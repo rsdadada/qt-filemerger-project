@@ -36,6 +36,7 @@ public:
 
     Qt::CheckState checkState() const;
     void setCheckState(Qt::CheckState state);
+    void clearChildren();
 
 
 private:

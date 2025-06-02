@@ -50,6 +50,8 @@ private slots:
     void showContextMenu(const QPoint &point);
     void handleSelectByExtensionTriggered(const QModelIndex& folderIndex, const QString& extension);
     void onRecursiveSelectByExtensionTriggered();
+    void importFromJson();
+    void showJsonFormatHelp();
 
 private:
     // void setupUi(); // Helper to set up UI elements if not using .ui file
@@ -66,6 +68,10 @@ private:
     QProgressBar *progressBar; // Added for the progress bar
 
     QAction *actionRecursiveSelectByExtension; // Action for new recursive selection
+    QAction *actionImportFromJson;
+    QAction *actionShowJsonFormatHelp;
+
+    QMenu *toolsMenu; // Keep a pointer to the Tools menu
 
     CustomFileModel *fileModel;
     FileMergerLogic *mergerLogic;

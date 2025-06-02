@@ -36,7 +36,7 @@ HelpDialog::HelpDialog(const QString &title, const QString &markdownFilePath, QW
     QFile file(markdownFilePath);
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
-        in.setCodec("UTF-8"); // Ensure UTF-8 is used for reading
+        // in.setCodec("UTF-8"); // THIS LINE IS REMOVED
         QString markdownContent = in.readAll();
         textBrowser->setMarkdown(markdownContent); // QTextBrowser can render Markdown
         file.close();
